@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Check if a directory was provided as an argument
+TARGET_DIR=$1
+DB_NAME="File System Integrity Database"
+DB_PATH="$TARGET_DIR/$DB_NAME"
+
+if [ -z "$TARGET_DIR" ]; then
+    echo "Usage: $0 /path/to/directory"
+    exit 1
+fi
+
+# Ensure the target directory exists
+if [ ! -d "$TARGET_DIR" ]; then
+    echo "Error: Directory $TARGET_DIR does not exist."
+    exit 1
+fi
+
+# --- Phase 1: Check if Database exists to determine Mode ---
+if [ ! -f "$DB_PATH" ]; then
+    echo "Initializing Database for: $TARGET_DIR"
+    
+    # --- Phase 2: Create the Baseline ---
+    # find: searches for files only (-type f)
+    # xargs: passes file names to sha256sum
+    # Redirection (>): saves the output into our DB file
+    find "$TARGET_DIR" -type f -not -name "$DB_NAME" -print0 | xargs -0 sha256sum > "$DB_PATH"
+    
+    echo "Baseline created successfully in $DB_PATH."
+else
+    echo "Checking integrity against baseline..."
+    
+    # --- Phase 3: Compare Current State to Baseline ---
+    # We use 'sha256sum --check' to verify existing files.
+    # --status: don't output anything, we'll handle the reporting.
+    
+    TMP_REPORT=$(mktemp)
+    
+    # Verify existing files in the database
+    sha256sum --check "$DB_PATH" --status 2>/dev/null
+    if [ $? -eq 0 ]; then
+        echo "[ OK ] No existing files have been modified."
+    else
+        echo "[ WARNING ] File modifications detected!"
+        # Show specifically which files failed the check
+        sha256sum --check "$DB_PATH" 2>&1 | grep "FAILED"
+    fi
+
+    # --- Phase 4: Identify Added or Deleted Files ---
+    # Generate a fresh list of current files for comparison
+    CURRENT_SCAN=$(mktemp)
+    find "$TARGET_DIR" -type f -not -name "$DB_NAME" -print0 | xargs -0 sha256sum > "$CURRENT_SCAN"
+
+    # Compare the filenames (ignoring hashes) between DB and current scan
+    # Added files:
+    echo "--- New Files Added ---"
+    comm -13 <(awk '{print $2}' "$DB_PATH" | sort) <(awk '{print $2}' "$CURRENT_SCAN" | sort)
+    
+    # Deleted files:
+    echo "--- Files Deleted ---"
+    comm -23 <(awk '{print $2}' "$DB_PATH" | sort) <(awk '{print $2}' "$CURRENT_SCAN" | sort)
+
+    # Clean up temp files
+    rm "$TMP_REPORT" "$CURRENT_SCAN"
+fi
