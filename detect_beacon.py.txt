@@ -1,0 +1,37 @@
+import sys
+from scapy.all import sniff, UDP, IP
+from collections import defaultdict
+import time
+import numpy as np
+
+# Dictionary to store timestamps for each unique destination (IP, Port)
+traffic_log = defaultdict(list)
+THRESHOLD_PACKETS = 5
+VARIANCE_LIMIT = 1.0 # Suspiciously low variance in seconds
+
+def detect_beacon(packet):
+    if packet.haslayer(UDP) and packet.haslayer(IP):
+        dest_ip = packet[IP].dst
+        dest_port = packet[UDP].dport
+        key = (dest_ip, dest_port)
+        
+        current_time = time.time()
+        traffic_log[key].append(current_time)
+        
+        # Analyze once we have enough data
+        if len(traffic_log[key]) >= THRESHOLD_PACKETS:
+            # Calculate time differences between consecutive packets
+            intervals = np.diff(traffic_log[key][-10:]) # Look at last 10
+            std_dev = np.std(intervals)
+            avg_interval = np.mean(intervals)
+            
+            if std_dev < VARIANCE_LIMIT:
+                print(f"[!] SUSPICIOUS BEACON DETECTED")
+                print(f"Target: {dest_ip}:{dest_port} | Avg Interval: {avg_interval:.2f}s | StdDev: {std_dev:.4f}")
+            
+            # Keep log size manageable
+            if len(traffic_log[key]) > 20:
+                traffic_log[key].pop(0)
+
+print("Starting UDP Beacon Detection... (Press Ctrl+C to stop)")
+sniff(filter="udp", prn=detect_beacon, store=0)
