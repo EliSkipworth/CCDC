@@ -1,0 +1,76 @@
+#!/bin/bash
+
+echo "Configuring Dovecot for AD authentication..."
+
+# Backup the current config
+cp /etc/dovecot/conf.d/10-auth.conf /root/backup_*/10-auth.conf.backup
+
+# Check what's currently included
+echo "Current authentication includes:"
+grep "^!include auth-" /etc/dovecot/conf.d/10-auth.conf
+
+# Comment out system auth and enable PAM auth
+sed -i 's/^!include auth-system.conf.ext/#!include auth-system.conf.ext/' /etc/dovecot/conf.d/10-auth.conf
+
+# Check if PAM auth line exists, if not add it
+if ! grep -q "^!include auth-pam.conf.ext" /etc/dovecot/conf.d/10-auth.conf; then
+    # Find the line with auth-system and add PAM after it
+    sed -i '/^#!include auth-system.conf.ext/a !include auth-pam.conf.ext' /etc/dovecot/conf.d/10-auth.conf
+fi
+
+echo "✓ Updated 10-auth.conf"
+
+# Now configure the PAM authentication file
+cat > /etc/dovecot/conf.d/auth-pam.conf.ext <<'EOF'
+# PAM authentication for SSSD/Active Directory
+
+passdb {
+  driver = pam
+  args = session=yes dovecot
+}
+
+userdb {
+  driver = passwd
+  override_fields = home=/home/%u
+}
+EOF
+
+echo "✓ Created auth-pam.conf.ext"
+
+# Create PAM configuration for Dovecot
+cat > /etc/pam.d/dovecot <<'EOF'
+#%PAM-1.0
+auth       required     pam_sss.so
+account    required     pam_sss.so
+password   required     pam_sss.so
+session    optional     pam_mkhomedir.so
+EOF
+
+echo "✓ Created /etc/pam.d/dovecot"
+
+# Check NSS configuration
+echo ""
+echo "NSS configuration for passwd:"
+grep "^passwd:" /etc/nsswitch.conf
+
+# Restart Dovecot
+echo ""
+echo "Restarting Dovecot..."
+systemctl restart dovecot
+
+if systemctl is-active --quiet dovecot; then
+    echo "✓ Dovecot restarted successfully"
+else
+    echo "✗ Dovecot failed to restart!"
+    journalctl -u dovecot -n 20
+fi
+
+echo ""
+echo "========================================="
+echo "Dovecot AD Authentication Configured"
+echo "========================================="
+echo ""
+echo "Test with an AD user:"
+echo "  Username: username@ccdcteam.com"
+echo "  Or just:  username"
+echo ""
